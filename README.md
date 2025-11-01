@@ -7,8 +7,9 @@ It collaborates with Docusarus and any static-page builder provided by your CDN.
 
 
 ## Milestones:
-- [ ] Github authentication & RESET Api interaction 
-- [ ] Sqlite as config & log database
+- [x] Github authentication & RESET Api interaction 
+- [x] Sqlite as config & log database
+- [x] Command line interaction
 - [ ] RSS xml building
 - [ ] Subscriber e-mailing api
 - [ ] Security enhancements
