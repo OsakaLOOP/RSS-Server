@@ -1,3 +1,7 @@
+# LICENSED UNDER MIT LICENSE.
+# COPYRIGHT: @OsakaLOOP 2025
+
+
 import socketserver
 import http.server
 import requests
@@ -8,12 +12,15 @@ import time
 import sys
 import unicodedata
 import urllib
+import datetime
 
 import smtplib
 import sqlite3
+from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.dom import minidom
 
 from github import Github, Auth, UnknownObjectException
-#from octokit import Octokit
+
 
 
 
@@ -96,6 +103,105 @@ class OAuthCallBackHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"404 Not Found")
             print('收到未知请求:',self.translate_path(self.path))
+    
+   
+class dbErr(Exception):
+    pass
+
+def checkDB(cursor,sha = None):
+    cursor.execute(   
+                '''SELECT id, message, author, date_time, sha FROM commit_log ORDER BY id ASC'''
+                )  
+    res=cursor.fetchall()
+    i=0
+    shaLst=[]
+    if sha:
+        for r in res:
+            if sha==r[4]:
+                return False
+        return True
+    else:
+        if res!=[]:
+            for r in res:
+                if r[0]==i+1 and r[4] not in shaLst:
+                    i+=1
+                    shaLst.append(r[4])
+                else:
+                    errmsg=f'Unexpected ID:{r[0]}'if r[0]!=i+1 else f'Multiple records for {r[4]}'
+                    print(f"数据库存在冲突: {errmsg}")
+                    return False
+        else:
+            print('暂无 commit_log 记录')
+            return -1
+        print(f'查找到 {len(res)} 条 commit_log 记录')
+        return True
+
+class commitLog():
+    def __init__(self):
+        self.message=None
+        self.author=None
+        self.date_time=None
+        self.sha=None
+        self.id=genID()
+        commitLogLst.append(self)
+        
+        
+    def load(self, id, message, author, date_time, sha):
+        self.id=id
+        self.message=message
+        self.author=author
+        self.date_time=date_time
+        self.sha=sha
+    
+    def load_db(self,cursor):
+        cursor.execute(   
+                '''SELECT message, author, date_time, sha FROM commit_log WHERE id=?'''
+                , (self.id,))  
+        res=cursor.fetchone()
+        if res:
+            self.message=res[0]
+            self.author=res[1]
+            self.date_time=res[2]
+            self.sha=res[3]
+            return True
+        else:
+            # N/A
+            return False
+        
+    def save_db(self,cursor,database):
+        cursor.execute('''   
+                INSERT INTO commit_log (id, message, author, date_time, sha) VALUES (?, ?, ?, ?, ?)
+                ''', (self.id, self.message, self.author, self.date_time, self.sha))  
+        database.commit()
+        
+    
+        
+def genID():
+    # 生成唯一 ID
+    if len(commitLogLst)==0:
+        return 1
+    else:
+        return commitLogLst[-1].id+1
+    
+
+
+def initLog():
+    global titlePrinted
+    valid = checkDB(cur)
+    if valid==1:
+        idRes=cur.execute(
+            '''SELECT id ORDER BY id ASC'''
+        )
+        exactPrt(titleLst)
+        titlePrinted = True
+        
+        for i in range(0,idRes.fetchall()[-1][0]):
+           log=commitLog()
+           if log.load_db(cur):
+               exactPrt(prtLst=[(20,'['+classifyCommit(log.message)+']','beg'),(20, log._time,'mid'),(15, log.author,'mid'),(8,log.sha,'mid'),(0,'//'.join(log.message),'end')])
+        
+    elif valid==0:
+        raise dbErr('数据库冲突, 无法生成唯一ID')       
             
 def runCallbackServer():
     with socketserver.TCPServer((ADDR, PORT), OAuthCallBackHandler, bind_and_activate=False) as httpd:
@@ -223,7 +329,7 @@ def messageContent(msg):
     except:
             return(msg)
 
-def classifyCommits(message: str) -> str:
+def classifyCommit(message: str) -> str:
     message_l = message.lower().strip()
     
     if message_l[:4]=="feat":
@@ -243,7 +349,7 @@ def classifyCommits(message: str) -> str:
 
 def printCommit(cmt):
     message = cmt.commit.message.split('\n')
-    category = classifyCommits(message[0])
+    category = classifyCommit(message[0])
     date_time = cmt.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
     author = cmt.commit.author.name
     prtLst=[(20,'['+category+']','beg'),(20, date_time,'mid'),(15, author,'mid'),(8,cmt.sha[:8],'mid'),(0,'//'.join(message),'end')]
@@ -277,10 +383,13 @@ def exactPrt(lst:list):
     
 
 def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
+    db1 = sqlite3.connect('data.db')
+    cur1 = db1.cursor()
     
     print(f'开始监控 - Repo[{RepoNme}] Branch[{BranchNme}] 间隔: {interval}s\n按 Ctrl+C 停止')
     tarRepo=None
     tarBranch=None
+    global titlePrinted
     
     try:
         tarRepo = g.get_repo(RepoNme)
@@ -298,14 +407,22 @@ def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
             # 获取目标分支的最新提交
             currentCommit=tarBranch.commit
             currentSHA = currentCommit.sha
-            titleLst=[(20,'Commit 类型','beg-title'),(20,'时间戳','mid'),(15,'作者','mid'),(8,'SHA8','mid'),(0,'描述','end-title')]
 
             if lastSHA is None:
                 # 首次运行，只记录最新的 SHA，不处理旧提交
                 print(f"首次检查：当前最新提交 SHA 为 {currentSHA[:8]}")
-                exactPrt(titleLst)
+                if not titlePrinted:
+                    exactPrt(titleLst)
+                    titlePrinted=True
                 # will def a seperate function
                 printCommit(currentCommit)
+                if checkDB(cur1, currentCommit.sha[:8]):
+                        cmtLog=commitLog()
+                        cmtLog.sha=currentCommit.sha[:8]
+                        cmtLog.author=currentCommit.commit.author.name
+                        cmtLog.date_time=currentCommit.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
+                        cmtLog.message='//'.join(currentCommit.commit.message.split('\n'))
+                        cmtLog.save_db(cur1,db1)
                 
             elif currentSHA != lastSHA:
                 print(f"检测到新提交！")
@@ -325,6 +442,12 @@ def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
                 # 从旧到新打印新提交
                 for cmt in reversed(newCommits):
                     printCommit(cmt)
+                    if checkDB(cur1,cmt.sha[:8]):
+                        cmtLog=commitLog()
+                        cmtLog.author=cmt.commit.author.name
+                        cmtLog.date_time=cmt.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
+                        cmtLog.message='//'.join(cmt.commit.message.split('\n'))
+                        cmtLog.save_DB(cur1,db1)
             
             lastSHA = currentSHA
         
@@ -353,6 +476,11 @@ if __name__=='__main__':
     cur = db.cursor()
     dbRes = cur.execute("SELECT name FROM sqlite_master")
     nameLst = [nme[0] for nme in dbRes.fetchall()]
+    commitLogLst = []
+    titleLst=[(20,'Commit 类型','beg-title'),(20,'时间戳','mid'),(15,'作者','mid'),(8,'SHA8','mid'),(0,'描述','end-title')]
+    titlePrinted = False
+    exc=False
+    
     if 'config' in nameLst and 'commit_log'in nameLst:
         print('已连接到现有数据库')
     else:
@@ -368,7 +496,7 @@ if __name__=='__main__':
                                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 message TEXT,
                                 author TEXT,
-                                date TEXT NOT NULL,
+                                date_time TEXT NOT NULL,
                                 sha TEXT
                             )''')
             db.commit()
@@ -407,8 +535,8 @@ if __name__=='__main__':
         token_storage=config['token_storage']
         
     except Exception as e:
-            print(f'配置初始化失败: {str(e)}')
-    
+        print(f'配置初始化失败: {str(e)}')
+        exc=True
 
 
     AuthURI=urllib.parse.quote(RedirURI)
@@ -420,7 +548,7 @@ if __name__=='__main__':
 
     oauth_result={'code':None,'state':None}
     res_error=[]
-    if token_storage!='':
+    if token_storage!='' and not exc:
         Decision=True if input('请确认是否利用现存 Token: '+token_storage+' 若是请输入T\n')=='T' else False
         if Decision:
             UserToken=token_storage
@@ -439,7 +567,7 @@ if __name__=='__main__':
             if UserToken!=token_storage:
                 rewriteToken()
 
-    if UserToken:
+    if UserToken and not exc:
         auth=Auth.Token(UserToken)
         g=Github(auth=auth)
         user=g.get_user()
@@ -453,6 +581,15 @@ if __name__=='__main__':
             print('获取用户名:',user.login if user.login else'N/A',end='')
             print(' - 确认匹配' if user.login==UserName else ' - 不匹配!应为'+UserName)
             print('获取 Repos:',list(repoDict.keys()),' - 查找到对应 Repo' if RepoName.split('/')[1] in repoDict.keys() else '不存在对应 Repo:'+ RepoName.split('/')[1]) 
+            
+            try:
+                initLog()
+            except Exception as e:
+                print(f'错误: {str(e)}')
+            db.close()
+            monitoring_thread=threading.Thread(target=monitoring ,args=(g, RepoName, BranchName, 60),daemon=True)
+          
+            
             monitoring_thread=threading.Thread(target=monitoring ,args=(g, RepoName, BranchName, 60),daemon=True)
             monitoring_thread.start()
             
@@ -463,5 +600,5 @@ if __name__=='__main__':
         while True and not exc:
             time.sleep(1)
             
-        db.close()
+        db1.close()
         print('已终止')
