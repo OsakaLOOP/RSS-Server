@@ -14,3 +14,4 @@ Working well with any repo you'd like to trace, it can also collaborate with Doc
 - [ ] Subscriber e-mailing api
 - [ ] Security enhancements
 - [ ] Better interactions
+- [ ] Refactoring with Flask framework instead of native http.server
