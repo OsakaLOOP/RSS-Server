@@ -1,4 +1,8 @@
 # RSS-Server
+
+![GitHub Repo stars](https://img.shields.io/github/stars/OsakaLOOP/RSS-Server)
+![GitHub License](https://img.shields.io/github/license/OsakaLOOP/RSS-Server)
+
 ## Introduction
 A local RSS provider server built with PyGithub, etc. My 1st personal project. Crafted with heart. Commits & comments are welcome.
 
