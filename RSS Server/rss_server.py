@@ -505,7 +505,7 @@ if __name__=='__main__':
         
     # Init config
     config={}
-    configFallback={'ADDR':'127.0.0.1','PORT':8964,'max_wait':30,'CliID':'censored','CliSEC':'censored','UserName':'OsakaLOOP','RepoName':'OsakaLOOP/censored','BranchName':'main','RedirURI':'http://127.0.0.1:8964/auth','Scope':'repo','StateBase':'censored','token_storage':'gho_censored'}
+    configFallback={'ADDR':'127.0.0.1','PORT':8964,'max_wait':30,'CliID':'censored','CliSEC':'censored','UserName':'OsakaLOOP','RepoName':'OsakaLOOP/censored','BranchName':'main','RedirURI':'http://127.0.0.1:8964/auth','Scope':'repo','StateBase':'censored','token_storage':'gho_censored','rss_path':r'C:\Users\WRH\Desktop\Python\RSS Server\rss.xml', 'base_url':'https://github.com/OsakaLOOP/Doc_Homepage', 'feed_title':'LOOP 文庫', 'feed_alt':'環状線は今日も走り続ける。', 'feed_url':'https://doc.s3xyseia.xyz/'}
     # replace the censored content for your own. see more on RESET api wiki
     # If your repo is private, than that's it; otherwise, use 'user'
     # Change above for your Github Client/Repo

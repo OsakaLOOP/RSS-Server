@@ -10,7 +10,7 @@ Working well with any repo you'd like to trace, it can also collaborate with Doc
 - [x] Github authentication & RESET Api interaction 
 - [x] Sqlite as config & log database
 - [x] Command line interaction
-- [ ] RSS xml building
+- [x] RSS xml building
 - [ ] Subscriber e-mailing api
 - [ ] Security enhancements
 - [ ] Better interactions
