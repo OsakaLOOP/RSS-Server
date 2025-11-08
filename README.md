@@ -1,5 +1,6 @@
 # RSS-Server
 
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=jwenjian.visitor-badge&left_color=red&right_color=green&left_text=Visitors)
 ![GitHub Repo stars](https://img.shields.io/github/stars/OsakaLOOP/RSS-Server)
 ![GitHub License](https://img.shields.io/github/license/OsakaLOOP/RSS-Server)
 
