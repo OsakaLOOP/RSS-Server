@@ -5,14 +5,17 @@
 import socketserver
 import http.server
 import requests
+#from flask import Flask, request, render_template_string, redirect
 
 import threading
 import random
 import time
 import sys
+import os
 import unicodedata
 import urllib
 import datetime
+import re
 
 import smtplib
 import sqlite3
@@ -20,7 +23,6 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 
 from github import Github, Auth, UnknownObjectException
-
 
 
 
@@ -45,11 +47,18 @@ feat: 新增功能(对应语义化版本中的 MINOR)。
 
 fxed: 修复缺陷(对应语义化版本中的 PATCH)。
 
+rfct: 重构代码。
+
 docs: 文档更新。
 
-styl: 风格更改，不影响逻辑。
+---以下为 Docusarus 专属 ---
 
-rfct: 重构代码。
+styl: 网站风格(css)
+
+cont: 网站内容(md)
+
+srcs: 静态资源(/src)
+
 '''
 
 # Step1 - 登陆
@@ -103,14 +112,14 @@ class OAuthCallBackHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"404 Not Found")
             print('收到未知请求:',self.translate_path(self.path))
-    
-   
+           
+
 class dbErr(Exception):
     pass
 
 def checkDB(cursor,sha = None):
     cursor.execute(   
-                '''SELECT id, message, author, date_time, sha FROM commit_log ORDER BY id ASC'''
+                '''SELECT id, message, author, date_time, sha, linkto FROM commit_log ORDER BY id ASC'''
                 )  
     res=cursor.fetchall()
     i=0
@@ -142,20 +151,24 @@ class commitLog():
         self.author=None
         self.date_time=None
         self.sha=None
+        self.linkto=None
+        
         self.id=genID()
         commitLogLst.append(self)
         
         
-    def load(self, id, message, author, date_time, sha):
+        
+    def load(self, id, message, author, date_time, sha, linkto):
         self.id=id
         self.message=message
         self.author=author
         self.date_time=date_time
         self.sha=sha
+        self.linkto=linkto
     
     def load_db(self,cursor):
         cursor.execute(   
-                '''SELECT message, author, date_time, sha FROM commit_log WHERE id=?'''
+                '''SELECT message, author, date_time, sha, linkto FROM commit_log WHERE id=?'''
                 , (self.id,))  
         res=cursor.fetchone()
         if res:
@@ -163,6 +176,7 @@ class commitLog():
             self.author=res[1]
             self.date_time=res[2]
             self.sha=res[3]
+            self.linkto=res[4]
             return True
         else:
             # N/A
@@ -170,8 +184,8 @@ class commitLog():
         
     def save_db(self,cursor,database):
         cursor.execute('''   
-                INSERT INTO commit_log (id, message, author, date_time, sha) VALUES (?, ?, ?, ?, ?)
-                ''', (self.id, self.message, self.author, self.date_time, self.sha))  
+                INSERT INTO commit_log (id, message, author, date_time, sha, linkto) VALUES (?, ?, ?, ?, ?, ?)
+                ''', (self.id, self.message, self.author, self.date_time, self.sha, self.linkto))  
         database.commit()
         
     
@@ -190,7 +204,7 @@ def initLog():
     valid = checkDB(cur)
     if valid==1:
         idRes=cur.execute(
-            '''SELECT id ORDER BY id ASC'''
+            '''SELECT id FROM commit_log ORDER BY id ASC'''
         )
         exactPrt(titleLst)
         titlePrinted = True
@@ -198,18 +212,18 @@ def initLog():
         for i in range(0,idRes.fetchall()[-1][0]):
            log=commitLog()
            if log.load_db(cur):
-               exactPrt(prtLst=[(20,'['+classifyCommit(log.message)+']','beg'),(20, log._time,'mid'),(15, log.author,'mid'),(8,log.sha,'mid'),(0,'//'.join(log.message),'end')])
+               exactPrt(lst=[(18,classifyCommit(log.message),'beg'),(20, log.date_time,'mid'),(15, log.author,'mid'),(8,log.sha,'mid'),(0,messageContent(log.message),'end')])
         
     elif valid==0:
-        raise dbErr('数据库冲突, 无法生成唯一ID')       
-            
+        raise dbErr('数据库冲突, 无法生成唯一ID')
+    
+
 def runCallbackServer():
     with socketserver.TCPServer((ADDR, PORT), OAuthCallBackHandler, bind_and_activate=False) as httpd:
         httpd.allow_reuse_address = True
         httpd.server_bind()
         httpd.server_activate()
         print(f'本地服务器启动，监听于 {ADDR}:{PORT}...')
-        
         global http_server_instance
         http_server_instance = httpd
         
@@ -236,9 +250,10 @@ def getAuth():
     start_time = time.time()
     if not server_thread.is_alive():
              sys.exit("服务器启动失败，请检查端口是否被占用。")
-    while (oauth_result['code'] is None and res_error == [] and time.time()-start_time <= max_wait):
-        time.sleep(0.1)
     if 'http_server_instance' in globals():
+        while (oauth_result['code'] is None and res_error == [] and time.time()-start_time <= max_wait):
+            time.sleep(0.1)
+    
         print(f'\n本地服务器停止, 用时 {time.time()-start_time}s')
         if oauth_result["code"] and oauth_result['state'] == State:
             print("成功捕获 OAuth Code, 验证 State 安全！")
@@ -247,7 +262,7 @@ def getAuth():
             print("警告: State 验证失败！可能存在 CSRF 攻击！")
             return(['State Error',oauth_result['state']])
         else:
-            return(['Parse Error',oauth_result['state']])
+            return(['Parse Error',None])
     if time.time()-start_time<=max_wait:
         print('超时:',max_wait)
         return(['Time Out'])
@@ -316,43 +331,47 @@ def rewriteToken():
 
 def messageSubtype(msg):
     try: 
-        return(msg.split(sep='[')[1].split(sep=']')[0]).strip()
+        return (msg.split(sep='[')[1].split(sep=']')[0]).strip(' []')
     except:
         try:
-            return(msg.split(sep=':'))[0].strip()
+            return (msg.split(sep=':'))[0].strip(' []')
         except:
-            return(msg)
+            return ('')
 
 def messageContent(msg):
     try:
-        return(msg.split(sep=':')[1]).strip()
+        return messageSubtype(msg)+': '+msg.split(sep=':')[1].strip(' []')
     except:
-            return(msg)
+            return (msg)
 
 def classifyCommit(message: str) -> str:
     message_l = message.lower().strip()
     
     if message_l[:4]=="feat":
-        return f"Feature - {messageSubtype(message_l)}"
+        return "Feature"
     elif message_l[:4]=="fxed":
-        return f"Bug Fix - {messageSubtype(message_l)}"
+        return "Bug Fix"
     elif message_l[:4]=="docs":
-        return f"Documentation - {messageSubtype(message_l)}(文档内容更新)"
+        return "Documentation"
     elif message_l[:4]=="styl":
-        return f"Style - {messageSubtype(message_l)} (前端样式优化)"
+        return "Docusarus Style"
     elif message_l[:4]=="rfac":
-        return f"Refactor - {messageSubtype(message_l)}"
+        return "Code Refactor"
+    elif message_l[:4]=="cont":
+        return "New Content"
+    elif message_l[:4]=="srcs":
+        return "New Resources"
     elif message_l[:4]=="test":
-        return f"Test - {messageSubtype(message_l)}"
+        return "Test"
     else:
-        return f"Other - {messageSubtype(message_l)}"
+        return "Other"
 
-def printCommit(cmt):
-    message = cmt.commit.message.split('\n')
+def printCommit(cmt,splt):
+    message = messageContent(cmt.commit.message).split('\n')
     category = classifyCommit(message[0])
     date_time = cmt.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
     author = cmt.commit.author.name
-    prtLst=[(20,'['+category+']','beg'),(20, date_time,'mid'),(15, author,'mid'),(8,cmt.sha[:8],'mid'),(0,'//'.join(message),'end')]
+    prtLst=[(18,category,'beg'),(20, date_time,'mid'),(15, author,'mid'),(8,cmt.sha[:8],'mid'),(0,splt.join(message),'end')]
     exactPrt(prtLst)
     #print(f"{('['+category+']'):<20} {date_time:>20} | {author:^15} | {cmt.sha[:8]} | {'//'.join(message)}") # Seperate multiple lines
 
@@ -370,7 +389,7 @@ def exactLen(tot:int,strIn:str)->int:
 def exactPrt(lst:list):
     for i in lst:
         if i[2] in [0, 'beg']:
-            print(f'{i[1]:<{exactLen(i[0],i[1])}}',end='   ')
+            print(f"[{i[1]:^{exactLen(i[0],i[1])}}]",end='   ')
         elif i[2] in [1, 'beg-title']:
             print(f'{i[1]:^{exactLen(i[0],i[1])}}',end='   ')    
         elif i[2] in [2, 'mid']:
@@ -383,8 +402,13 @@ def exactPrt(lst:list):
     
 
 def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
-    db1 = sqlite3.connect('data.db')
-    cur1 = db1.cursor()
+    global db1
+    try:
+        db1 = sqlite3.connect('data.db')
+        cur1 = db1.cursor()
+    except Exception as e:
+        print(f"错误: 监控线程数据库连接失败 - {e}")
+        return
     
     print(f'开始监控 - Repo[{RepoNme}] Branch[{BranchNme}] 间隔: {interval}s\n按 Ctrl+C 停止')
     tarRepo=None
@@ -410,22 +434,24 @@ def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
 
             if lastSHA is None:
                 # 首次运行，只记录最新的 SHA，不处理旧提交
-                print(f"首次检查：当前最新提交 SHA 为 {currentSHA[:8]}")
+                
                 if not titlePrinted:
+                    print(f"首次检查：当前最新提交 SHA 为 {currentSHA[:8]}")
                     exactPrt(titleLst)
-                    titlePrinted=True
-                # will def a seperate function
-                printCommit(currentCommit)
+                    titlePrinted = True
+                
                 if checkDB(cur1, currentCommit.sha[:8]):
+                        printCommit(currentCommit,'//')
                         cmtLog=commitLog()
                         cmtLog.sha=currentCommit.sha[:8]
                         cmtLog.author=currentCommit.commit.author.name
                         cmtLog.date_time=currentCommit.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
-                        cmtLog.message='//'.join(currentCommit.commit.message.split('\n'))
+                        cmtLog.message=currentCommit.commit.message
+                        cmtLog.linkto=getDocusarusURL(currentCommit)
                         cmtLog.save_db(cur1,db1)
                 
             elif currentSHA != lastSHA:
-                print(f"检测到新提交！")
+                print(f"检查到新提交！")
                 
                 # 获取从 last_sha 到 current_sha 之间的所有新提交
                 newCommits = []
@@ -441,14 +467,14 @@ def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
 
                 # 从旧到新打印新提交
                 for cmt in reversed(newCommits):
-                    printCommit(cmt)
+                    printCommit(cmt,'//')
                     if checkDB(cur1,cmt.sha[:8]):
                         cmtLog=commitLog()
                         cmtLog.author=cmt.commit.author.name
                         cmtLog.date_time=cmt.commit.author.date.strftime('%Y-%m-%d %H:%M:%S')
-                        cmtLog.message='//'.join(cmt.commit.message.split('\n'))
-                        cmtLog.save_DB(cur1,db1)
-            
+                        cmtLog.message=cmt.commit.message
+                        cmtLog.linkto=getDocusarusURL(cmt)
+                        cmtLog.save_db(cur1,db1)
             lastSHA = currentSHA
         
         except UnknownObjectException:
@@ -458,20 +484,85 @@ def monitoring(g:Github, RepoNme:str, BranchNme:str, interval:int):
             print(f"API 请求失败: {e}")
         except Exception as e:
             print(f"意外错误: {e}")
-    
+
+        makeRSS(db1)
+        
         # 等待下一个轮询周期
         time.sleep(interval)
 
-    
-    
-    
-#def readHistory():
-    
-#def makeRSS():
 
+def getDocusarusURL(cmt):
+
+    for file in cmt.files:
+        filename = file.filename
+        if filename.endswith(('.md','.mdx')):
+            if filename.startswith('docs/'):
+                url_path = filename.rsplit('.', 1)[0].replace('_', '-').lower()
+                return f"{feed_url.strip('/')}/{url_path}"
+            elif filename.startswith('blog/'):
+                url_pattern = re.compile(r"blog/(\d{4}-\d{2}-\d{2})-(.*)\.(md|mdx)$")
+                return f"{feed_url.strip('/')}/{url_pattern.match(filename).group(2).replace('_', '-').lower()}"
+            
+    return f"{feed_url.strip('/')}/"
+
+    
+def makeRSS(db_conn):
+    
+    rss = Element('rss', version='2.0', attrib={"xmlns:atom": "http://www.w3.org/2005/Atom"})
+    channel = SubElement(rss, 'channel')
+    
+    SubElement(channel, 'title').text = feed_title
+    SubElement(channel, 'link').text = f"{feed_url.strip('/')}/"
+    SubElement(channel, 'description').text = f"<![CDATA[feed_alt]]>"
+    SubElement(channel, 'language').text = 'ja'
+    SubElement(channel, 'generator').text = 'Python RSS Generator for Github Commits by @OsakaLOOP'
+    SubElement(channel, 'copyright').text = '©2025 @OsakaLOOP'
+    
+    
+    for log in reversed(commitLogLst):
+        # RSS typically lists items newest first
+        item = SubElement(channel, 'item')
+        
+        title_text = classifyCommit(log.message)
+        SubElement(item, 'title').text = title_text
+        
+        commit_link = log.linkto
+        SubElement(item, 'link').text = commit_link
+        
+        guid = SubElement(item, 'guid', isPermaLink='false')
+        guid.text = log.sha
+        
+        rep=messageContent(log.message).replace(':',' -').replace('\n', '<br/>')
+        
+        description_text = (
+            f"<![CDATA[Author: {log.author}<br/>"
+            f"Content: {rep}]]>"
+        )
+        SubElement(item, 'description').text = description_text
+        
+        # Timestamp in RFC 822 format
+        try:
+            pub_date = datetime.datetime.strptime(
+                log.date_time, 
+                '%Y-%m-%d %H:%M:%S'
+            ).strftime('%a, %d %b %Y %H:%M:%S GMT')
+            SubElement(item, 'pubDate').text = pub_date
+        except ValueError:
+            pass
+                
+        rough_str = tostring(rss, encoding='utf-8')
+        reparsed = minidom.parseString(rough_str)
+        xml_str = reparsed.toprettyxml(indent="  ")
+        try:
+            with open(rss_path, "w", encoding="utf-8") as f:
+                f.write(xml_str)
+            
+        except Exception as e:
+            print(f"错误: RSS 文件写入失败 - {e}")
 
 
 if __name__=='__main__':
+      
     db = sqlite3.connect('data.db')
     cur = db.cursor()
     dbRes = cur.execute("SELECT name FROM sqlite_master")
@@ -497,19 +588,23 @@ if __name__=='__main__':
                                 message TEXT,
                                 author TEXT,
                                 date_time TEXT NOT NULL,
-                                sha TEXT
+                                sha TEXT UNIQUE,
+                                linkto TEXT
                             )''')
             db.commit()
         except Exception as e:
             print(f'数据库初始化失败: {str(e)}')
-        
+            exc=True
+    
     # Init config
     config={}
     configFallback={'ADDR':'127.0.0.1','PORT':8964,'max_wait':30,'CliID':'censored','CliSEC':'censored','UserName':'OsakaLOOP','RepoName':'OsakaLOOP/censored','BranchName':'main','RedirURI':'http://127.0.0.1:8964/auth','Scope':'repo','StateBase':'censored','token_storage':'gho_censored','rss_path':r'C:\Users\WRH\Desktop\Python\RSS Server\rss.xml', 'base_url':'https://github.com/OsakaLOOP/Doc_Homepage', 'feed_title':'LOOP 文庫', 'feed_alt':'環状線は今日も走り続ける。', 'feed_url':'https://doc.s3xyseia.xyz/'}
+    # StateBase='zundamon0721'
     # replace the censored content for your own. see more on RESET api wiki
+    # State will be attached with a dynamic 4-digit suffix for safety
     # If your repo is private, than that's it; otherwise, use 'user'
+    # Hard-wired fallback
     # Change above for your Github Client/Repo
-    
     try:
         for k in configFallback.keys():
             cur.execute('''
@@ -533,18 +628,21 @@ if __name__=='__main__':
         Scope=config['Scope']
         StateBase=config['StateBase']
         token_storage=config['token_storage']
+        rss_path=config['rss_path']
+        base_url=config['base_url']
+        feed_title=config['feed_title']
+        feed_alt=config['feed_alt']
+        feed_url=config['feed_url']
         
     except Exception as e:
         print(f'配置初始化失败: {str(e)}')
         exc=True
 
+    # If your repo is private, than that's it; otherwise, use 'user'
+    # Change above for your Github Client/Repo
 
     AuthURI=urllib.parse.quote(RedirURI)
     # URI standard safe
-
-    #StateBase='zundamon0721'    # State will be attached with a dynamic 4-digit suffix for safety
-
-    #token_storage='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'   # Hard-wired fallback
 
     oauth_result={'code':None,'state':None}
     res_error=[]
@@ -555,6 +653,7 @@ if __name__=='__main__':
         else:
             server_thread=threading.Thread(target=runCallbackServer, daemon=True)
             server_thread.start()
+            
             result=['Not Yet']
             while result[0] in ['Not Yet', 'Parse Error','State Error','Time Out']:  
                 result=getAuth()
@@ -562,9 +661,12 @@ if __name__=='__main__':
             if http_server_instance:
                 http_server_instance.shutdown()
                 server_thread.join()
+                
             if result[0]!='Not Yet':
                 UserToken=getToken()
-            if UserToken!=token_storage:
+            else:
+                UserToken=None
+            if UserToken and UserToken!=token_storage:
                 rewriteToken()
 
     if UserToken and not exc:
@@ -587,18 +689,30 @@ if __name__=='__main__':
             except Exception as e:
                 print(f'错误: {str(e)}')
             db.close()
-            monitoring_thread=threading.Thread(target=monitoring ,args=(g, RepoName, BranchName, 60),daemon=True)
-          
             
             monitoring_thread=threading.Thread(target=monitoring ,args=(g, RepoName, BranchName, 60),daemon=True)
             monitoring_thread.start()
             
         except Exception as e:
-            print(f'错误: GFW 坏事做尽, 请检查 VPN 是否连接 - {str(e)[:10]}')
+            if '401' in str(e):
+                print(f'错误: 连接中止, 请检查 Token 是否失效 - {str(e)[:10]}')
+            elif 'SSLError' in str(e):
+                print(f'错误: 证书不可信, 请检查本地反向代理 - {str(e)[:10]}')
+            else:
+                print(f'错误: GFW 坏事做尽, 请检查 VPN 是否连接 - {str(e)[:10]}')
             exc = True
             
         while True and not exc:
-            time.sleep(1)
-            
-        db1.close()
-        print('已终止')
+            try:
+                time.sleep(1)
+            except KeyboardInterrupt:
+                print("\n输入 Ctrl+C, 正在终止程序...")
+                exc = True
+                
+        if db1:   
+            db1.close()
+        if db:
+            db.close
+        print('程序终止')
+    elif exc:
+        print("启动过程中发生错误，程序终止。")
